@@ -202,7 +202,7 @@ function AppInner() {
         onGetStarted={() => navigate('/farmer')}
         onLogin={() => navigate('/farmer')}
         onExplore={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}
-        onAdminLogin={() => window.location.href = '/admin/login'}
+        onAdminLogin={() => { window.location.href = '/admin/login' }}
       />
     )
   }
