@@ -1,33 +1,66 @@
 import { useState, useEffect } from 'react'
-import { TrendingUp, TrendingDown, Minus, MapPin, Store } from 'lucide-react'
+import { TrendingUp, TrendingDown, Minus, MapPin, Store, AlertCircle } from 'lucide-react'
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell } from 'recharts'
 import { Card, Badge, SectionHeader, EmptyState, LoadingSpinner } from './ui'
 import { supabase } from '../lib/supabase'
 import { CropPrice } from '../lib/types'
+import { useAuth } from '../lib/auth'
 
 export default function CropPrices() {
+  const { user } = useAuth()
   const [prices, setPrices] = useState<CropPrice[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [selectedCrop, setSelectedCrop] = useState('')
 
-  useEffect(() => { loadPrices() }, [])
+  useEffect(() => {
+    loadPrices()
+  }, [user?.id])
 
   async function loadPrices() {
     setLoading(true)
-    const { data } = await supabase.from('crop_prices').select('*').order('recorded_date', { ascending: false })
-    setPrices(data || [])
-    if (data && data.length > 0 && !selectedCrop) setSelectedCrop(data[0].crop_name)
-    setLoading(false)
+    setError(null)
+    try {
+      const [pricesRes, farmRes] = await Promise.all([
+        supabase.from('crop_prices').select('*').order('recorded_date', { ascending: false }),
+        user?.id
+          ? supabase.from('farm_profiles').select('main_crop, location').eq('user_id', user.id).maybeSingle()
+          : supabase.from('farm_profiles').select('main_crop, location').order('created_at', { ascending: true }).limit(1).maybeSingle(),
+      ])
+
+      if (pricesRes.error) {
+        throw new Error(pricesRes.error.message)
+      }
+
+      const data = pricesRes.data || []
+      setPrices(data)
+
+      if (data.length > 0) {
+        const uniqueCrops = [...new Set(data.map(p => p.crop_name))]
+        const userMainCrop = farmRes?.data?.main_crop
+
+        if (userMainCrop && uniqueCrops.includes(userMainCrop)) {
+          setSelectedCrop(userMainCrop)
+        } else if (!selectedCrop || !uniqueCrops.includes(selectedCrop)) {
+          setSelectedCrop(data[0].crop_name)
+        }
+      }
+    } catch (err: any) {
+      console.error('Error loading crop prices:', err)
+      setError('Market prices are currently unavailable. Please check back later or verify your network connection.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const crops = [...new Set(prices.map(p => p.crop_name))]
   const cropPrices = prices.filter(p => p.crop_name === selectedCrop)
-  const allMarketsForCrop = cropPrices
 
   // Generate historical trend data
   const trendData = generateTrendData(selectedCrop, cropPrices)
 
   function generateTrendData(crop: string, current: CropPrice[]) {
+    if (!current || current.length === 0) return []
     const basePrice = current[0]?.price_per_kg || 20
     const data: { month: string; price: number }[] = []
     const months = ['Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep']
@@ -51,13 +84,13 @@ export default function CropPrices() {
   }
 
   const currentPrice = cropPrices[0]?.price_per_kg || 0
-  const prevPrice = trendData[trendData.length - 2]?.price || currentPrice
+  const prevPrice = trendData.length >= 2 ? trendData[trendData.length - 2]?.price : currentPrice
   const priceChange = currentPrice - prevPrice
-  const priceChangePct = ((priceChange / prevPrice) * 100).toFixed(1)
+  const priceChangePct = prevPrice > 0 ? ((priceChange / prevPrice) * 100).toFixed(1) : '0.0'
 
   // Where to sell comparison
   const marketComparison = [...cropPrices].sort((a, b) => {
-    return (b.price_per_kg) - (a.price_per_kg)
+    return b.price_per_kg - a.price_per_kg
   })
 
   return (
@@ -70,6 +103,26 @@ export default function CropPrices() {
 
       {loading ? (
         <LoadingSpinner />
+      ) : error ? (
+        <div className="p-5 bg-red-50 border border-red-200 rounded-2xl flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center shrink-0">
+              <AlertCircle size={20} className="text-red-600" />
+            </div>
+            <div>
+              <h4 className="font-bold text-red-900 text-sm">Failed to Load Market Prices</h4>
+              <p className="text-xs text-red-700 mt-0.5">{error}</p>
+            </div>
+          </div>
+          <button onClick={loadPrices} className="btn-secondary text-xs px-3.5 py-2 shrink-0">
+            Retry
+          </button>
+        </div>
+      ) : prices.length === 0 ? (
+        <EmptyState
+          message="No market price data available at this time. Check back later for live Mandi updates."
+          icon={<TrendingUp size={40} />}
+        />
       ) : (
         <>
           {/* Crop selector */}
@@ -115,55 +168,67 @@ export default function CropPrices() {
           {/* Historical trend chart */}
           <Card>
             <h3 className="font-semibold mb-4">Price History — {selectedCrop}</h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#9ca3af' }} />
-                <YAxis tick={{ fontSize: 12, fill: '#9ca3af' }} tickFormatter={v => `₹${v}`} />
-                <Tooltip
-                  formatter={(v: number) => [`₹${v}/kg`, 'Price']}
-                  contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '13px' }}
-                />
-                <Line type="monotone" dataKey="price" stroke="#16a34a" strokeWidth={3} dot={{ fill: '#16a34a', r: 4 }} activeDot={{ r: 6 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            {trendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <LineChart data={trendData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#9ca3af' }} />
+                  <YAxis tick={{ fontSize: 12, fill: '#9ca3af' }} tickFormatter={v => `₹${v}`} />
+                  <Tooltip
+                    formatter={(v: number) => [`₹${v}/kg`, 'Price']}
+                    contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '13px' }}
+                  />
+                  <Line type="monotone" dataKey="price" stroke="#16a34a" strokeWidth={3} dot={{ fill: '#16a34a', r: 4 }} activeDot={{ r: 6 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-gray-400 py-8 text-center">No trend data available for {selectedCrop}</p>
+            )}
           </Card>
 
           {/* Where to sell comparison */}
           <Card>
             <h3 className="font-semibold mb-4 flex items-center gap-2"><Store size={18} className="text-primary-500" /> Where to Sell — Market Comparison</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={marketComparison.map(m => ({ name: m.market_location, price: m.price_per_kg, trend: m.trend }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                <YAxis tick={{ fontSize: 12, fill: '#9ca3af' }} tickFormatter={v => `₹${v}`} />
-                <Tooltip formatter={(v: number) => [`₹${v}/kg`, 'Price']} contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '13px' }} />
-                <Bar dataKey="price" radius={[8, 8, 0, 0]}>
+            {marketComparison.length > 0 ? (
+              <>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={marketComparison.map(m => ({ name: m.market_location, price: m.price_per_kg, trend: m.trend }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <YAxis tick={{ fontSize: 12, fill: '#9ca3af' }} tickFormatter={v => `₹${v}`} />
+                    <Tooltip formatter={(v: number) => [`₹${v}/kg`, 'Price']} contentStyle={{ borderRadius: '12px', border: '1px solid #e5e7eb', fontSize: '13px' }} />
+                    <Bar dataKey="price" radius={[8, 8, 0, 0]}>
+                      {marketComparison.map((m, i) => (
+                        <Cell key={i} fill={i === 0 ? '#16a34a' : '#86efac'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+                <div className="mt-4 space-y-2">
                   {marketComparison.map((m, i) => (
-                    <Cell key={i} fill={i === 0 ? '#16a34a' : '#86efac'} />
+                    <div key={m.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-primary-100 text-primary-700' : 'bg-gray-200 text-gray-500'}`}>
+                          #{i + 1}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium">{m.market_location}</p>
+                          <p className="text-xs text-gray-500 flex items-center gap-1">
+                            <MapPin size={11} /> {m.recorded_date ? new Date(m.recorded_date + 'T00:00:00').toLocaleDateString() : 'Recent'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm">₹{m.price_per_kg}/kg</span>
+                        {trendIcon(m.trend)}
+                      </div>
+                    </div>
                   ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-            <div className="mt-4 space-y-2">
-              {marketComparison.map((m, i) => (
-                <div key={m.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-primary-100 text-primary-700' : 'bg-gray-200 text-gray-500'}`}>
-                      #{i + 1}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{m.market_location}</p>
-                      <p className="text-xs text-gray-500 flex items-center gap-1"><MapPin size={11} /> {new Date(m.recorded_date).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm">₹{m.price_per_kg}/kg</span>
-                    {trendIcon(m.trend)}
-                  </div>
                 </div>
-              ))}
-            </div>
+              </>
+            ) : (
+              <p className="text-sm text-gray-400 py-8 text-center">No market comparison data available for {selectedCrop}</p>
+            )}
           </Card>
 
           {/* All crops overview */}
@@ -174,8 +239,12 @@ export default function CropPrices() {
                 const latest = prices.find(p => p.crop_name === c)
                 if (!latest) return null
                 return (
-                  <div key={c} className="p-3 bg-gray-50 rounded-xl hover:shadow-sm transition-all cursor-pointer" onClick={() => setSelectedCrop(c)}>
-                    <p className="text-sm font-medium text-gray-700">{c}</p>
+                  <div
+                    key={c}
+                    className={`p-3 rounded-xl transition-all cursor-pointer ${selectedCrop === c ? 'bg-green-50 border border-green-200 shadow-sm' : 'bg-gray-50 hover:shadow-sm'}`}
+                    onClick={() => setSelectedCrop(c)}
+                  >
+                    <p className={`text-sm font-medium ${selectedCrop === c ? 'text-green-800 font-bold' : 'text-gray-700'}`}>{c}</p>
                     <p className="text-lg font-bold mt-1">₹{latest.price_per_kg}</p>
                     <div className="flex items-center gap-1 mt-1">{trendIcon(latest.trend)}</div>
                   </div>

@@ -39,11 +39,15 @@ export default function FarmProfilePage({ onNavigate }: { onNavigate?: (v: strin
     }
   }, [profile])
 
-  useEffect(() => { loadFarms() }, [])
+  useEffect(() => { loadFarms() }, [user?.id])
 
   async function loadFarms() {
     setLoading(true)
-    const { data } = await supabase.from('farm_profiles').select('*').order('created_at', { ascending: true })
+    let query = supabase.from('farm_profiles').select('*')
+    if (user?.id) {
+      query = query.eq('user_id', user.id)
+    }
+    const { data } = await query.order('created_at', { ascending: true })
     setFarms(data || [])
     setLoading(false)
   }
@@ -58,7 +62,11 @@ export default function FarmProfilePage({ onNavigate }: { onNavigate?: (v: strin
 
   async function addFarm() {
     if (!newFarm.farm_name || !newFarm.location) return
-    await supabase.from('farm_profiles').insert(newFarm)
+    const payload: any = { ...newFarm }
+    if (user?.id) {
+      payload.user_id = user.id
+    }
+    await supabase.from('farm_profiles').insert(payload)
     setNewFarm({ farm_name: '', location: '', area_hectares: 1, main_crop: 'Wheat', soil_type: 'Loamy' })
     setShowAddFarm(false)
     loadFarms()

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
-import { CloudRain, Bug, Sprout, Droplets, Calculator, TrendingUp, Leaf, Recycle, RefreshCw, Handshake, ArrowRight, Sun, Wind, MapPin, Bot, PhoneCall, Tablet, Crown, Mic, Sparkles, ChevronRight, Thermometer, Activity, AlertTriangle, CheckCircle2, BarChart2, Compass } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { CloudRain, Bug, Sprout, Droplets, Calculator, TrendingUp, Leaf, Recycle, RefreshCw, Handshake, ArrowRight, Sun, Wind, MapPin, Bot, PhoneCall, Tablet, Crown, Mic, Sparkles, ChevronRight, Thermometer, Activity, AlertTriangle, CheckCircle2, BarChart2, Compass, Edit3, X, Loader2 } from 'lucide-react'
 import { Card, Badge, StatCard, LoadingSpinner } from './ui'
-import { generateWeatherForecast, getFarmingAction } from '../lib/agriData'
+import { generateWeatherForecast, getFarmingAction, CROPS } from '../lib/agriData'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { FarmProfile } from '../lib/types'
@@ -42,6 +42,28 @@ const PRIORITY_LABELS: Record<string, { label: string; color: 'red' | 'amber' | 
   low: { label: 'Recommended', color: 'green' },
 }
 
+const CROP_EMOJIS: Record<string, string> = {
+  Tomato: '🍅',
+  Onion: '🧅',
+  Potato: '🥔',
+  Rice: '🌾',
+  Wheat: '🌾',
+  Brinjal: '🍆',
+  Carrot: '🥕',
+  Maize: '🌽',
+  Cotton: '🌱',
+  Sugarcane: '🎋',
+  Soybean: '🫘',
+  Groundnut: '🥜',
+  Mustard: '🌼',
+  Pulses: '🫘',
+  Cabbage: '🥬',
+  Cauliflower: '🥦',
+  Banana: '🍌',
+  Mango: '🥭',
+  Chilli: '🌶️',
+}
+
 const DEMO_CROPS = [
   { name: 'Tomato', emoji: '🍅', stage: 'Flowering', health: 88, planted: 'Aug 15', harvest: 'Nov 10', color: 'from-red-500 to-rose-600', bgLight: 'bg-red-50', textCol: 'text-red-600', barColor: '#ef4444', rec: 'Apply potassium fertilizer this week for better fruit set.' },
   { name: 'Rice (Paddy)', emoji: '🌾', stage: 'Tillering', health: 94, planted: 'Aug 28', harvest: 'Dec 02', color: 'from-amber-500 to-yellow-600', bgLight: 'bg-amber-50', textCol: 'text-amber-700', barColor: '#f59e0b', rec: 'Maintain 5cm water level. Weed management needed by day 30.' },
@@ -49,14 +71,24 @@ const DEMO_CROPS = [
 ]
 
 export default function Dashboard({ onNavigate }: { onNavigate: (id: string) => void }) {
-  const { profile } = useAuth()
+  const { user, profile } = useAuth()
   const [weather] = useState(() => generateWeatherForecast()[0])
   const [stats, setStats] = useState({ soilRecords: 0, irrigationLogs: 0, profitCalcs: 0, wasteRecords: 0, sustainabilityScore: 0 })
   const [loading, setLoading] = useState(true)
   const [farm, setFarm] = useState<FarmProfile | null>(null)
   const [cropPrice, setCropPrice] = useState<{ price: number; trend: string } | null>(null)
+  const [marketPricesList, setMarketPricesList] = useState<{ crop_name: string; price_per_kg: number; trend: string }[]>([])
   const [isPremium, setIsPremium] = useState(false)
   const [greeting, setGreeting] = useState('Good morning')
+
+  // Farm details editing state
+  const [isEditingFarm, setIsEditingFarm] = useState(false)
+  const [formLocation, setFormLocation] = useState('')
+  const [formArea, setFormArea] = useState('')
+  const [formCrop, setFormCrop] = useState('Wheat')
+  const [saveLoading, setSaveLoading] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveSuccess, setSaveSuccess] = useState(false)
 
   useEffect(() => {
     const h = new Date().getHours()
@@ -66,15 +98,21 @@ export default function Dashboard({ onNavigate }: { onNavigate: (id: string) => 
 
   useEffect(() => {
     async function loadAll() {
-      const [soil, irrigation, profit, waste, farms, prices, sub] = await Promise.all([
+      const farmQuery = user?.id
+        ? supabase.from('farm_profiles').select('*').eq('user_id', user.id).order('created_at', { ascending: true }).limit(1).maybeSingle()
+        : supabase.from('farm_profiles').select('*').order('created_at', { ascending: true }).limit(1).maybeSingle()
+
+      const [soil, irrigation, profit, waste, farms, prices, allPrices, sub] = await Promise.all([
         supabase.from('soil_records').select('id, health_score', { count: 'exact', head: false }).order('created_at', { ascending: false }).limit(1),
         supabase.from('irrigation_logs').select('id', { count: 'exact', head: true }),
         supabase.from('profit_calculations').select('id, net_profit', { count: 'exact', head: false }).order('created_at', { ascending: false }).limit(1),
         supabase.from('waste_management').select('id', { count: 'exact', head: true }),
-        supabase.from('farm_profiles').select('*').order('created_at', { ascending: true }).limit(1).maybeSingle(),
+        farmQuery,
         supabase.from('crop_prices').select('price_per_kg, trend, crop_name').order('recorded_date', { ascending: false }).limit(1).maybeSingle(),
+        supabase.from('crop_prices').select('crop_name, price_per_kg, trend').order('recorded_date', { ascending: false }).limit(20),
         fetchCurrentSubscription(),
       ])
+
       setStats({
         soilRecords: soil.count || 0,
         irrigationLogs: irrigation.count || 0,
@@ -84,11 +122,171 @@ export default function Dashboard({ onNavigate }: { onNavigate: (id: string) => 
       })
       setFarm(farms.data || null)
       setCropPrice(prices.data ? { price: prices.data.price_per_kg, trend: prices.data.trend } : null)
+      setMarketPricesList(allPrices.data || [])
       setIsPremium(sub.plan_type === 'premium')
       setLoading(false)
     }
     loadAll()
-  }, [])
+  }, [user?.id])
+
+  useEffect(() => {
+    if (farm) {
+      setFormLocation(farm.location || '')
+      setFormArea(farm.area_hectares != null ? String(farm.area_hectares) : '1')
+      setFormCrop(farm.main_crop || 'Wheat')
+    } else {
+      setFormLocation('')
+      setFormArea('1')
+      setFormCrop('Wheat')
+    }
+  }, [farm])
+
+  async function handleSaveFarm(e?: React.FormEvent) {
+    if (e) e.preventDefault()
+    setSaveError(null)
+
+    const trimmedLoc = formLocation.trim()
+    if (!trimmedLoc) {
+      setSaveError('Please enter a farm location')
+      return
+    }
+
+    const parsedArea = parseFloat(formArea)
+    if (isNaN(parsedArea) || parsedArea <= 0) {
+      setSaveError('Please enter a valid farm size in hectares (greater than 0)')
+      return
+    }
+
+    if (!formCrop) {
+      setSaveError('Please select a main crop')
+      return
+    }
+
+    setSaveLoading(true)
+
+    try {
+      const roundedArea = Math.round(parsedArea * 100) / 100
+
+      if (farm?.id) {
+        // Update existing farm profile
+        const { data, error } = await supabase
+          .from('farm_profiles')
+          .update({
+            location: trimmedLoc,
+            area_hectares: roundedArea,
+            main_crop: formCrop,
+          })
+          .eq('id', farm.id)
+          .select()
+          .single()
+
+        if (error) throw error
+        setFarm(data)
+      } else {
+        // Insert new farm profile
+        const defaultFarmName = profile?.full_name ? `${profile.full_name}'s Farm` : 'My Farm'
+        const insertPayload: any = {
+          farm_name: defaultFarmName,
+          location: trimmedLoc,
+          area_hectares: roundedArea,
+          main_crop: formCrop,
+          soil_type: 'Loamy',
+        }
+        if (user?.id) {
+          insertPayload.user_id = user.id
+        }
+
+        const { data, error } = await supabase
+          .from('farm_profiles')
+          .insert(insertPayload)
+          .select()
+          .single()
+
+        if (error) throw error
+        setFarm(data)
+      }
+
+      setSaveSuccess(true)
+      setTimeout(() => {
+        setSaveSuccess(false)
+        setIsEditingFarm(false)
+      }, 1000)
+    } catch (err: any) {
+      console.error('Error saving farm details:', err)
+      setSaveError(err.message || 'Unable to save farm details. Please try again.')
+    } finally {
+      setSaveLoading(false)
+    }
+  }
+
+  const displayedCrops = useMemo(() => {
+    if (!farm?.main_crop) return DEMO_CROPS
+    const mainCropName = farm.main_crop
+    const exists = DEMO_CROPS.find(c => c.name.toLowerCase().includes(mainCropName.toLowerCase()))
+    if (exists) {
+      return [exists, ...DEMO_CROPS.filter(c => c !== exists)]
+    }
+    const mainCropCard = {
+      name: mainCropName,
+      emoji: CROP_EMOJIS[mainCropName] || '🌱',
+      stage: 'Vegetative Growth',
+      health: 92,
+      planted: 'Aug 20',
+      harvest: 'Nov 25',
+      color: 'from-emerald-600 to-green-700',
+      bgLight: 'bg-green-50',
+      textCol: 'text-green-700',
+      barColor: '#16a34a',
+      rec: `Active monitoring for ${mainCropName}. Balanced nutrient application recommended.`
+    }
+    return [mainCropCard, ...DEMO_CROPS.slice(0, 2)]
+  }, [farm?.main_crop])
+
+  const displayedMarketPrices = useMemo(() => {
+    const defaultPrices = [
+      { crop: 'Tomato', emoji: '🍅', price: 28, prev: 25, unit: 'kg' },
+      { crop: 'Onion', emoji: '🧅', price: 22, prev: 24, unit: 'kg' },
+      { crop: 'Potato', emoji: '🥔', price: 18, prev: 17, unit: 'kg' },
+      { crop: 'Rice', emoji: '🌾', price: 35, prev: 34, unit: 'kg' },
+      { crop: 'Brinjal', emoji: '🍆', price: 15, prev: 16, unit: 'kg' },
+      { crop: 'Carrot', emoji: '🥕', price: 40, prev: 38, unit: 'kg' },
+    ]
+
+    const priceMap = new Map<string, { price: number; trend: string }>()
+    marketPricesList.forEach(p => {
+      if (!priceMap.has(p.crop_name)) {
+        priceMap.set(p.crop_name, { price: p.price_per_kg, trend: p.trend })
+      }
+    })
+
+    const updatedDefaults = defaultPrices.map(item => {
+      const match = priceMap.get(item.crop)
+      if (match) {
+        const prev = match.trend === 'up' ? match.price - 1.5 : match.trend === 'down' ? match.price + 1.5 : match.price
+        return { ...item, price: match.price, prev }
+      }
+      return item
+    })
+
+    if (!farm?.main_crop) return updatedDefaults
+
+    const exists = updatedDefaults.find(i => i.crop.toLowerCase() === farm.main_crop?.toLowerCase())
+    if (exists) {
+      return [exists, ...updatedDefaults.filter(i => i !== exists)]
+    }
+
+    const mainCropPrice = priceMap.get(farm.main_crop)
+    const price = mainCropPrice?.price || (farm.main_crop === 'Wheat' ? 26.5 : 30)
+    const prev = mainCropPrice?.trend === 'up' ? price - 1.5 : price + 1.0
+    const mainCropItem = {
+      crop: farm.main_crop,
+      emoji: CROP_EMOJIS[farm.main_crop] || '🌾',
+      price,
+      prev,
+      unit: 'kg'
+    }
+    return [mainCropItem, ...updatedDefaults.slice(0, 5)]
+  }, [farm?.main_crop, marketPricesList])
 
   const farmingActions = getFarmingAction(weather)
 
@@ -111,31 +309,52 @@ export default function Dashboard({ onNavigate }: { onNavigate: (id: string) => 
               </h1>
               <p className="text-green-200/70 mt-1.5 text-sm">Here's your farm intelligence overview for today.</p>
             </div>
-            <button
-              onClick={() => onNavigate('subscription')}
-              className={`shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${
-                isPremium
-                  ? 'bg-amber-400/20 text-amber-300 border-amber-400/30 hover:bg-amber-400/30'
-                  : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
-              }`}
-            >
-              <Crown size={14} className={isPremium ? 'text-amber-300' : 'text-amber-400'} />
-              {isPremium ? 'Premium Active ✨' : 'Free · Upgrade →'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsEditingFarm(true)}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold border border-white/20 bg-white/10 hover:bg-white/20 text-white transition-all shadow-sm"
+              >
+                <Edit3 size={13} className="text-green-300" />
+                <span>{farm ? 'Edit Farm Details' : 'Set Farm Details'}</span>
+              </button>
+              <button
+                onClick={() => onNavigate('subscription')}
+                className={`shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border transition-all ${
+                  isPremium
+                    ? 'bg-amber-400/20 text-amber-300 border-amber-400/30 hover:bg-amber-400/30'
+                    : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                }`}
+              >
+                <Crown size={14} className={isPremium ? 'text-amber-300' : 'text-amber-400'} />
+                {isPremium ? 'Premium Active ✨' : 'Free · Upgrade →'}
+              </button>
+            </div>
           </div>
 
           {/* Farm quick stats row */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {[
-              { icon: MapPin, label: 'Location', value: farm?.location || 'Not set' },
-              { icon: Sprout, label: 'Farm Size', value: farm?.area_hectares ? `${farm.area_hectares} ha` : 'Not set' },
-              { icon: Leaf, label: 'Main Crop', value: farm?.main_crop || 'Not set' },
-              { icon: CloudRain, label: 'Weather', value: `${weather.condition}` },
-              { icon: Droplets, label: 'Rain Chance', value: `${weather.rainChance}%` },
-              { icon: Wind, label: 'Wind Speed', value: `${weather.windSpeed} km/h` },
-            ].map(({ icon: Icon, label, value }, i) => (
-              <div key={i} className="stat-card-glass px-3 py-3 rounded-xl">
-                <Icon size={14} className="text-green-300/70 mb-1.5" />
+              { icon: MapPin, label: 'Location', value: farm?.location || 'Not set', editable: true },
+              { icon: Sprout, label: 'Farm Size', value: farm?.area_hectares ? `${farm.area_hectares} ha` : 'Not set', editable: true },
+              { icon: Leaf, label: 'Main Crop', value: farm?.main_crop || 'Not set', editable: true },
+              { icon: CloudRain, label: 'Weather', value: `${weather.condition}`, editable: false },
+              { icon: Droplets, label: 'Rain Chance', value: `${weather.rainChance}%`, editable: false },
+              { icon: Wind, label: 'Wind Speed', value: `${weather.windSpeed} km/h`, editable: false },
+            ].map(({ icon: Icon, label, value, editable }, i) => (
+              <div
+                key={i}
+                onClick={editable ? () => setIsEditingFarm(true) : undefined}
+                className={`stat-card-glass px-3 py-3 rounded-xl transition-all ${
+                  editable ? 'cursor-pointer hover:bg-white/20 hover:scale-[1.02] relative group' : ''
+                }`}
+                title={editable ? `Click to edit ${label}` : undefined}
+              >
+                <div className="flex items-center justify-between">
+                  <Icon size={14} className="text-green-300/70 mb-1.5" />
+                  {editable && (
+                    <Edit3 size={11} className="text-green-300/40 group-hover:text-green-300 transition-colors" />
+                  )}
+                </div>
                 <p className="text-[10px] text-green-300/60 font-medium uppercase tracking-wide">{label}</p>
                 <p className="text-sm font-semibold text-white truncate mt-0.5">{value}</p>
               </div>
@@ -143,6 +362,126 @@ export default function Dashboard({ onNavigate }: { onNavigate: (id: string) => 
           </div>
         </div>
       </div>
+
+      {/* ===== EDIT FARM DETAILS MODAL ===== */}
+      {isEditingFarm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-md overflow-hidden animate-scaleUp">
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-primary-700 to-primary-800 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center">
+                  <Sprout size={18} className="text-green-300" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">{farm ? 'Edit Farm Details' : 'Set Farm Details'}</h3>
+                  <p className="text-xs text-green-200/80">Configure your farm location, size, and main crop</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setIsEditingFarm(false); setSaveError(null) }}
+                className="p-1 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleSaveFarm} className="p-6 space-y-4">
+              {saveSuccess && (
+                <div className="p-3 bg-green-50 border border-green-200 text-green-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-fadeIn">
+                  <CheckCircle2 size={16} className="text-green-600 shrink-0" />
+                  Farm details saved successfully!
+                </div>
+              )}
+
+              {saveError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-fadeIn">
+                  <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                  {saveError}
+                </div>
+              )}
+
+              <div>
+                <label className="label flex items-center gap-1.5">
+                  <MapPin size={14} className="text-primary-600" /> Farm Location
+                </label>
+                <input
+                  type="text"
+                  required
+                  className="input"
+                  placeholder="e.g. Ludhiana, Punjab or District / State"
+                  value={formLocation}
+                  onChange={e => setFormLocation(e.target.value)}
+                />
+                <p className="text-[11px] text-gray-400 mt-1">Used for weather alerts and local mandi price tracking</p>
+              </div>
+
+              <div>
+                <label className="label flex items-center gap-1.5">
+                  <Sprout size={14} className="text-primary-600" /> Farm Size (Hectares)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    required
+                    className="input pr-12"
+                    placeholder="e.g. 2.5"
+                    value={formArea}
+                    onChange={e => setFormArea(e.target.value)}
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">ha</span>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1">1 hectare ≈ 2.47 acres. Used for yield and water calculations</p>
+              </div>
+
+              <div>
+                <label className="label flex items-center gap-1.5">
+                  <Leaf size={14} className="text-primary-600" /> Main Crop
+                </label>
+                <select
+                  className="input"
+                  value={formCrop}
+                  onChange={e => setFormCrop(e.target.value)}
+                >
+                  {CROPS.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-gray-400 mt-1">Synchronized with crop health, progress tracking, and market radar</p>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => { setIsEditingFarm(false); setSaveError(null) }}
+                  className="btn-secondary text-xs px-4 py-2"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saveLoading}
+                  className="btn-primary text-xs px-5 py-2 flex items-center gap-2"
+                >
+                  {saveLoading ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" /> Saving...
+                    </>
+                  ) : saveSuccess ? (
+                    'Saved!'
+                  ) : (
+                    'Save Farm Details'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ===== SMART OVERVIEW CARDS ===== */}
       <div>
@@ -267,7 +606,7 @@ export default function Dashboard({ onNavigate }: { onNavigate: (id: string) => 
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {DEMO_CROPS.map((crop, i) => (
+          {displayedCrops.map((crop, i) => (
             <div key={i} className="crop-card animate-slideIn" style={{ animationDelay: `${i * 80}ms` }} onClick={() => onNavigate('disease')}>
               {/* Header */}
               <div className={`bg-gradient-to-r ${crop.color} px-5 py-4 flex items-center justify-between`}>
@@ -367,16 +706,9 @@ export default function Dashboard({ onNavigate }: { onNavigate: (id: string) => 
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {[
-            { crop: 'Tomato', emoji: '🍅', price: 28, prev: 25, unit: 'kg' },
-            { crop: 'Onion', emoji: '🧅', price: 22, prev: 24, unit: 'kg' },
-            { crop: 'Potato', emoji: '🥔', price: 18, prev: 17, unit: 'kg' },
-            { crop: 'Rice', emoji: '🌾', price: 35, prev: 34, unit: 'kg' },
-            { crop: 'Brinjal', emoji: '🍆', price: 15, prev: 16, unit: 'kg' },
-            { crop: 'Carrot', emoji: '🥕', price: 40, prev: 38, unit: 'kg' },
-          ].map((item, i) => {
+          {displayedMarketPrices.map((item, i) => {
             const up = item.price >= item.prev
-            const pct = Math.abs(((item.price - item.prev) / item.prev) * 100).toFixed(1)
+            const pct = item.prev > 0 ? Math.abs(((item.price - item.prev) / item.prev) * 100).toFixed(1) : '0.0'
             return (
               <button key={i} onClick={() => onNavigate('prices')} className="card card-hover text-center group animate-fadeIn" style={{ animationDelay: `${i * 40}ms` }}>
                 <div className="text-3xl mb-2">{item.emoji}</div>
