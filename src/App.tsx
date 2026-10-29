@@ -108,7 +108,7 @@ function AdminGuard({ children }: { children: React.ReactNode }) {
 // INNER APP (Farmer part mostly)
 // ============================================================
 function AppInner() {
-  const { user, loading, signOut, isFarmer } = useAuth()
+  const { user, loading, signOut, isFarmer, isAdmin } = useAuth()
   const { t, lang, setLang } = useLang()
   const navigate = useNavigate()
   const location = useLocation()
@@ -147,24 +147,33 @@ function AppInner() {
     setAiOpen(false)
   }
 
-  // Farmer specific checks — redirect via URL
+  // Auth specific redirects via URL
   useEffect(() => {
     if (!loading) {
       if (user && isFarmer && (view === 'landing' || view === 'auth')) {
         navigate('/farmer/dashboard', { replace: true })
       }
+      if (user && isAdmin && (view === 'landing' || view === 'auth')) {
+        navigate('/admin/dashboard', { replace: true })
+      }
       if (!user && view !== 'landing' && view !== 'auth') {
         navigate('/', { replace: true })
       }
     }
-  }, [user, loading, isFarmer, view])
+  }, [user, loading, isFarmer, isAdmin, view])
 
   // Unread notifications (farmers only)
   useEffect(() => {
     if (!user || !isFarmer) return
     async function checkUnread() {
-      const { count } = await supabase.from('notifications').select('id', { count: 'exact', head: true }).eq('read', false)
-      setUnreadCount(count || 0)
+      try {
+        const { count, error } = await supabase.from('notifications').select('id', { count: 'exact', head: true }).eq('read', false)
+        if (!error && count != null) {
+          setUnreadCount(count)
+        }
+      } catch {
+        // Silently catch network errors
+      }
     }
     checkUnread()
     const interval = setInterval(checkUnread, 30000)

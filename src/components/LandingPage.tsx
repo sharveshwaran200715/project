@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { CloudRain, Bug, Sprout, Droplets, Calculator, TrendingUp, Leaf, Recycle, RefreshCw, Handshake, Bot, ArrowRight, CheckCircle, Star, Mic, PhoneCall, Crown, Shield, ChevronDown, Globe, Zap, Wind, Sun, Thermometer } from 'lucide-react'
+import { CloudRain, Bug, Sprout, Droplets, Calculator, TrendingUp, Leaf, Recycle, RefreshCw, Handshake, Bot, ArrowRight, CheckCircle, Star, Mic, PhoneCall, Crown, Shield, ChevronDown, Globe, Zap, Sun, Lock } from 'lucide-react'
 import { useLang } from '../lib/i18n'
 import { useAuth } from '../lib/auth'
 
@@ -35,10 +35,11 @@ const CHAT_DEMO = [
 
 const NAV_LINKS = ['Dashboard', 'Crops', 'Market Prices', 'Weather', 'Water Mgmt', 'AI Assistant']
 
-export default function LandingPage({ onGetStarted, onLogin, onExplore }: {
+export default function LandingPage({ onGetStarted, onLogin, onExplore, onAdminLogin }: {
   onGetStarted: () => void
   onLogin: () => void
   onExplore: () => void
+  onAdminLogin: () => void
 }) {
   const { t } = useLang()
   const { user } = useAuth()
@@ -559,13 +560,24 @@ export default function LandingPage({ onGetStarted, onLogin, onExplore }: {
             ))}
           </div>
 
-          <div className="border-t border-gray-800 pt-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="border-t border-gray-800 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-xs text-gray-600">© 2026 FarmWise. All rights reserved.</p>
             <div className="flex items-center gap-2">
               <Shield size={13} className="text-green-600" />
               <p className="text-xs text-gray-600">Data encrypted. Privacy protected. Never shared.</p>
             </div>
-            <p className="text-xs text-gray-600">Demo data shown. Verify prices before selling.</p>
+            <div className="flex items-center gap-4">
+              <p className="text-xs text-gray-600">Demo data shown. Verify prices before selling.</p>
+              {/* Admin Login — only visible on landing page, never inside the farmer app */}
+              <button
+                id="admin-login-entry"
+                onClick={onAdminLogin}
+                className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-green-400 transition-colors group px-2.5 py-1.5 rounded-lg hover:bg-white/5"
+              >
+                <Lock size={11} className="text-gray-500 group-hover:text-green-400 transition-colors" />
+                Admin Access
+              </button>
+            </div>
           </div>
         </div>
       </footer>

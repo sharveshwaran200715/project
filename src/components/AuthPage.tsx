@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { Sprout, Mail, Lock, User, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react'
+import { Sprout, Mail, Lock, User, ArrowLeft, AlertCircle, Loader2, Sparkles, ExternalLink } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useLang } from '../lib/i18n'
 
 export default function AuthPage({ onBack }: { onBack: () => void }) {
-  const { signIn, signUp } = useAuth()
+  const { signIn, signUp, signInAsDemo } = useAuth()
   const { t } = useLang()
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [email, setEmail] = useState('')
@@ -31,6 +31,8 @@ export default function AuthPage({ onBack }: { onBack: () => void }) {
     }
     setLoading(false)
   }
+
+  const isConnectionError = error?.includes('Failed to fetch') || error?.includes('paused')
 
   return (
     <div className="min-h-screen flex">
@@ -89,12 +91,63 @@ export default function AuthPage({ onBack }: { onBack: () => void }) {
               </button>
             </p>
 
+            {/* Quick Demo Access banner */}
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2 text-emerald-900 font-semibold text-sm">
+                  <Sparkles size={16} className="text-emerald-600" />
+                  Instant Demo Access
+                </div>
+                <span className="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-medium">No DB required</span>
+              </div>
+              <p className="text-xs text-emerald-700 mb-3 leading-relaxed">
+                Want to explore FarmWise right away? Jump in with a pre-configured farmer demo profile.
+              </p>
+              <button
+                id="demo-farmer-login-btn"
+                type="button"
+                onClick={() => signInAsDemo('farmer')}
+                className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm"
+              >
+                <Sparkles size={16} />
+                Continue as Demo Farmer
+              </button>
+            </div>
+
             {error && (
-              <div className="flex items-start gap-2 p-3 bg-error-50 rounded-xl mb-4 animate-fadeIn">
-                <AlertCircle size={18} className="text-error-600 mt-0.5 shrink-0" />
-                <p className="text-sm text-error-700">{error}</p>
+              <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl mb-4 animate-fadeIn">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle size={18} className="text-red-600 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-red-800 mb-1">
+                      {isConnectionError ? 'Supabase Connection Error' : 'Authentication Error'}
+                    </p>
+                    <p className="text-xs text-red-700 leading-relaxed">{error}</p>
+                    {isConnectionError && (
+                      <div className="mt-3 pt-2.5 border-t border-red-200/60 flex flex-col gap-2">
+                        <a
+                          href="https://supabase.com/dashboard"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary-700 hover:text-primary-800 underline"
+                        >
+                          <ExternalLink size={13} /> Open Supabase Dashboard to Restore Project
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-3 text-gray-400 font-medium">Or log in with your Supabase account</span>
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               {mode === 'signup' && (
